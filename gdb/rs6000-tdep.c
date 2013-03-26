@@ -3095,6 +3095,12 @@ gdb_print_insn_powerpc (bfd_vma memaddr, disassemble_info *info)
 	 cpu and get much more sane disassembly output.  */
       if (info->mach == bfd_mach_ppc_e500)
 	info->disassembler_options = "e500x2";
+      else if (info->mach == bfd_mach_ppc_e500mc)
+	info->disassembler_options = "e500mc";
+      else if (info->mach == bfd_mach_ppc_e5500)
+	info->disassembler_options = "e5500";
+      else if (info->mach == bfd_mach_ppc_e6500)
+	info->disassembler_options = "e6500";
       else
 	info->disassembler_options = "any";
     }
