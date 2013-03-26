@@ -339,8 +339,6 @@ disassemble_init_powerpc (struct disassemble_info *info)
       last = vle_opcd_indices[i];
     }
 
-  if (info->arch == bfd_arch_powerpc)
-    powerpc_init_dialect (info);
 }
 
 /* Print a big endian PowerPC instruction.  */
@@ -348,6 +346,8 @@ disassemble_init_powerpc (struct disassemble_info *info)
 int
 print_insn_big_powerpc (bfd_vma memaddr, struct disassemble_info *info)
 {
+  if (info->private_data == NULL)
+    powerpc_init_dialect (info);
   return print_insn_powerpc (memaddr, info, 1, get_powerpc_dialect (info));
 }
 
@@ -356,6 +356,8 @@ print_insn_big_powerpc (bfd_vma memaddr, struct disassemble_info *info)
 int
 print_insn_little_powerpc (bfd_vma memaddr, struct disassemble_info *info)
 {
+  if (info->private_data == NULL)
+    powerpc_init_dialect (info);
   return print_insn_powerpc (memaddr, info, 0, get_powerpc_dialect (info));
 }
 
