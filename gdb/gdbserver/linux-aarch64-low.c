@@ -1304,6 +1304,15 @@ aarch64_regs_info (void)
   return &regs_info;
 }
 
+/* Implementation of linux_target_ops method "supports_range_stepping".  */
+
+static int
+aarch64_supports_range_stepping (void)
+{
+  return 1;
+}
+
+
 struct linux_target_ops the_low_target =
 {
   aarch64_arch_setup,
@@ -1330,6 +1339,13 @@ struct linux_target_ops the_low_target =
   aarch64_linux_new_thread,
   aarch64_linux_new_fork,
   aarch64_linux_prepare_to_resume,
+  NULL, /* process_qsupported */
+  NULL, /* supports_tracepoints */
+  NULL, /* get_thread_area */
+  NULL, /* install_fast_tracepoint_jump_pad */
+  NULL, /* emit_ops */
+  NULL, /* get_min_fast_tracepoint_insn_len */
+  aarch64_supports_range_stepping,
 };
 
 void
