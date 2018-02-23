@@ -30211,6 +30211,49 @@ don't appear in the actual output):
 @end smallexample
 
 
+@subheading The @code{-data-write-register-values} Command
+@findex -data-write-register-values
+
+@subsubheading Synopsis
+
+@smallexample
+ -data-write-register-values
+    @var{fmt} [ ( @var{regno} @var{values})*]
+@end smallexample
+
+Write given values into registers. The registers and values are
+given as pairs.
+
+Allowed formats for @var{fmt} are:
+
+@table @code
+@item x
+Hexadecimal
+@item o
+Octal
+@item t
+Binary
+@item d
+Decimal
+@item r
+Raw
+@item N
+Natural
+@end table
+
+@subsubheading Example
+
+For a PPC MBX board (note: line breaks are for readability only, they
+don't appear in the actual output):
+
+@smallexample
+(gdb)
+-data-write-register-values N 1008 32853
+^done
+(gdb)
+@end smallexample
+
+
 @subheading The @code{-data-read-memory} Command
 @findex -data-read-memory
 

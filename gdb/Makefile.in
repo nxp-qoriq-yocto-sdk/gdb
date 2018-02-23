@@ -1622,10 +1622,10 @@ version.c: Makefile version.in $(srcdir)/../bfd/version.h $(srcdir)/common/creat
 	    $(host_alias) $(target_alias) version.c
 
 observer.h: observer.sh doc/observer.texi
-	${srcdir}/observer.sh h ${srcdir}/doc/observer.texi observer.h
+	$(SHELL) ${srcdir}/observer.sh h ${srcdir}/doc/observer.texi observer.h
 
 observer.inc: observer.sh doc/observer.texi
-	${srcdir}/observer.sh inc ${srcdir}/doc/observer.texi observer.inc
+	$(SHELL) ${srcdir}/observer.sh inc ${srcdir}/doc/observer.texi observer.inc
 
 lint: $(LINTFILES)
 	$(LINT) $(INCLUDE_CFLAGS) $(LINTFLAGS) $(LINTFILES) \

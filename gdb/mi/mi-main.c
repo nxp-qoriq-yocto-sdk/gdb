@@ -1021,6 +1021,14 @@ mi_cmd_data_list_register_names (char *command, char **argv, int argc)
 	   regnum < numregs;
 	   regnum++)
 	{
+	  /* FIXME: Dirty hack to hide e200 SPR pseudoregisters */
+	  if (regnum >= 1000 && regnum < 1122)
+	    {
+	      ui_out_field_string (uiout, NULL, "");
+	      continue;
+	    }
+	  /* Dirty hack end */
+
 	  if (gdbarch_register_name (gdbarch, regnum) == NULL
 	      || *(gdbarch_register_name (gdbarch, regnum)) == '\0')
 	    ui_out_field_string (uiout, NULL, "");

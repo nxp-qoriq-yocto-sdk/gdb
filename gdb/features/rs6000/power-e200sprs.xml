@@ -1,0 +1,110 @@
+<?xml version="1.0"?>
+<!-- Copyright (C) 2007-2014 Free Software Foundation, Inc.
+
+     Copying and distribution of this file, with or without modification,
+     are permitted in any medium without royalty provided the copyright
+     notice and this notice are preserved.  -->
+
+<!DOCTYPE feature SYSTEM "gdb-target.dtd">
+<feature name="org.gnu.gdb.power.e200sprs">
+  <reg name="dec" bitsize="32" regnum="122"/>
+  <reg name="srr0" bitsize="32" regnum="126"/>
+  <reg name="srr1" bitsize="32" regnum="127"/>
+  <reg name="pid0" bitsize="32" regnum="148"/>
+  <reg name="decar" bitsize="32" regnum="154"/>
+  <reg name="csrr0" bitsize="32" regnum="158"/>
+  <reg name="csrr1" bitsize="32" regnum="159"/>
+  <reg name="dear" bitsize="32" regnum="161"/>
+  <reg name="esr" bitsize="32" regnum="162"/>
+  <reg name="ivpr" bitsize="32" regnum="163"/>
+  <reg name="usprg0" bitsize="32" regnum="356"/>
+  <reg name="utbl" bitsize="32" regnum="368"/>
+  <reg name="utbu" bitsize="32" regnum="369"/>
+  <reg name="sprg0" bitsize="32" regnum="372"/>
+  <reg name="sprg1" bitsize="32" regnum="373"/>
+  <reg name="sprg2" bitsize="32" regnum="374"/>
+  <reg name="sprg3" bitsize="32" regnum="375"/>
+  <reg name="sprg4" bitsize="32" regnum="376"/>
+  <reg name="sprg5" bitsize="32" regnum="377"/>
+  <reg name="sprg6" bitsize="32" regnum="378"/>
+  <reg name="sprg7" bitsize="32" regnum="379"/>
+  <reg name="tbl" bitsize="32" regnum="384"/>
+  <reg name="tbu" bitsize="32" regnum="385"/>
+  <reg name="pir" bitsize="32" regnum="386"/>
+  <reg name="pvr" bitsize="32" regnum="387"/>
+  <reg name="dbsr" bitsize="32" regnum="404"/>
+  <reg name="dbcr0" bitsize="32" regnum="408"/>
+  <reg name="dbcr1" bitsize="32" regnum="409"/>
+  <reg name="dbcr2" bitsize="32" regnum="410"/>
+  <reg name="iac1" bitsize="32" regnum="412"/>
+  <reg name="iac2" bitsize="32" regnum="413"/>
+  <reg name="iac3" bitsize="32" regnum="414"/>
+  <reg name="iac4" bitsize="32" regnum="415"/>
+  <reg name="dac1" bitsize="32" regnum="416"/>
+  <reg name="dac2" bitsize="32" regnum="417"/>
+  <reg name="dvc1" bitsize="32" regnum="418"/>
+  <reg name="dvc2" bitsize="32" regnum="419"/>
+  <reg name="tsr" bitsize="32" regnum="436"/>
+  <reg name="tcr" bitsize="32" regnum="440"/>
+  <reg name="ivor0" bitsize="32" regnum="500"/>
+  <reg name="ivor1" bitsize="32" regnum="501"/>
+  <reg name="ivor2" bitsize="32" regnum="502"/>
+  <reg name="ivor3" bitsize="32" regnum="503"/>
+  <reg name="ivor4" bitsize="32" regnum="504"/>
+  <reg name="ivor5" bitsize="32" regnum="505"/>
+  <reg name="ivor6" bitsize="32" regnum="506"/>
+  <reg name="ivor7" bitsize="32" regnum="507"/>
+  <reg name="ivor8" bitsize="32" regnum="508"/>
+  <reg name="ivor9" bitsize="32" regnum="509"/>
+  <reg name="ivor10" bitsize="32" regnum="510"/>
+  <reg name="ivor11" bitsize="32" regnum="511"/>
+  <reg name="ivor12" bitsize="32" regnum="512"/>
+  <reg name="ivor13" bitsize="32" regnum="513"/>
+  <reg name="ivor14" bitsize="32" regnum="514"/>
+  <reg name="ivor15" bitsize="32" regnum="515"/>
+  <reg name="spefscr" bitsize="32" regnum=" 612"/>
+  <reg name="l1cfg0" bitsize="32" regnum="615"/>
+  <reg name="l1cfg1" bitsize="32" regnum="616"/>
+  <reg name="ivor32" bitsize="32" regnum="628"/>
+  <reg name="ivor33" bitsize="32" regnum="629"/>
+  <reg name="ivor34" bitsize="32" regnum="630"/>
+  <reg name="ivor35" bitsize="32" regnum="631"/>
+  <reg name="ctxcr" bitsize="32" regnum="660"/>
+  <reg name="dbcr3" bitsize="32" regnum="661"/>
+  <reg name="dbcnt" bitsize="32" regnum="662"/>
+  <reg name="dbcr4" bitsize="32" regnum="663"/>
+  <reg name="dbcr5" bitsize="32" regnum="664"/>
+  <reg name="iac5" bitsize="32" regnum="665"/>
+  <reg name="iac6" bitsize="32" regnum="666"/>
+  <reg name="iac7" bitsize="32" regnum="667"/>
+  <reg name="altctxcr" bitsize="32" regnum="668"/>
+  <reg name="iac8" bitsize="32" regnum="668"/>
+  <reg name="dberc0" bitsize="32" regnum="669"/>
+  <reg name="mcsrr0" bitsize="32" regnum="670"/>
+  <reg name="mcsrr1" bitsize="32" regnum="671"/>
+  <reg name="mcsr" bitsize="32" regnum="672"/>
+  <reg name="mcar" bitsize="32" regnum="673"/>
+  <reg name="dsrr0" bitsize="32" regnum="674"/>
+  <reg name="dsrr1" bitsize="32" regnum="675"/>
+  <reg name="dbcr6" bitsize="32" regnum="703"/>
+  <reg name="sprg8" bitsize="32" regnum="704"/>
+  <reg name="sprg9" bitsize="32" regnum="705"/>
+  <reg name="mas0" bitsize="32" regnum="724"/>
+  <reg name="mas1" bitsize="32" regnum="725"/>
+  <reg name="mas2" bitsize="32" regnum="726"/>
+  <reg name="mas3" bitsize="32" regnum="727"/>
+  <reg name="mas4" bitsize="32" regnum="728"/>
+  <reg name="mas6" bitsize="32" regnum="730"/>
+  <reg name="tlb0cfg" bitsize="32" regnum="788"/>
+  <reg name="tlb1cfg" bitsize="32" regnum="789"/>
+  <reg name="l1finv1" bitsize="32" regnum="1059"/>
+  <reg name="hid0" bitsize="32" regnum="1108"/>
+  <reg name="hid1" bitsize="32" regnum="1109"/>
+  <reg name="l1csr0" bitsize="32" regnum="1110"/>
+  <reg name="l1csr1" bitsize="32" regnum="1111"/>
+  <reg name="mmucsr0" bitsize="32" regnum="1112"/>
+  <reg name="bucsr" bitsize="32" regnum="1113"/>
+  <reg name="mmucfg" bitsize="32" regnum="1115"/>
+  <reg name="l1finv0" bitsize="32" regnum="1116"/>
+  <reg name="svr" bitsize="32" regnum="1123"/>
+</feature>

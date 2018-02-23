@@ -81,6 +81,7 @@
 #include "features/rs6000/powerpc-750.c"
 #include "features/rs6000/powerpc-860.c"
 #include "features/rs6000/powerpc-e500.c"
+#include "features/rs6000/powerpc-vle.c"
 #include "features/rs6000/rs6000.c"
 
 /* Determine if regnum is an SPE pseudo-register.  */
@@ -103,6 +104,11 @@
     && (regnum) >= (tdep)->ppc_efpr0_regnum \
     && (regnum) < (tdep)->ppc_efpr0_regnum + ppc_num_efprs)
 
+/* Determine if regnum is an e200 SPR register.  */
+#define IS_SPR_PSEUDOREG(tdep, regnum) ((tdep)->ppc_spr_pseudo_regnum >= 0 \
+    && (regnum) >= (tdep)->ppc_spr_pseudo_regnum \
+    && (regnum) < (tdep)->ppc_spr_pseudo_regnum + ppc_num_sprs)
+
 /* The list of available "set powerpc ..." and "show powerpc ..."
    commands.  */
 static struct cmd_list_element *setpowerpccmdlist = NULL;
@@ -119,6 +125,29 @@ static const char *const powerpc_vector_strings[] =
   "spe",
   NULL
 };
+
+
+static const char *const e200sprs[] = {
+  "dec", "srr0", "srr1", "pid0", "decar", "csrr0", "csrr1",
+  "dear", "esr", "ivpr", "usprg0", "utbl", "utbu", "sprg0",
+  "sprg1", "sprg2", "sprg3", "sprg4", "sprg5", "sprg6", "sprg7",
+  "tbl", "tbu", "pir", "pvr", "dbsr", "dbcr0", "dbcr1", "dbcr2",
+  "iac1", "iac2", "iac3", "iac4", "dac1", "dac2", "dvc1", "dvc2",
+  "tsr", "tcr", "ivor0", "ivor1", "ivor2", "ivor3", "ivor4",
+  "ivor5", "ivor6", "ivor7", "ivor8", "ivor9", "ivor10", "ivor11",
+  "ivor12", "ivor13", "ivor14", "ivor15", "spefscr", "l1cfg0",
+  "l1cfg1", "ivor32", "ivor33", "ivor34", "ivor35", "ctxcr", "dbcr3",
+  "dbcnt", "dbcr4", "dbcr5", "iac5", "iac6", "iac7", "altctxcr",
+  "iac8", "dberc0", "mcsrr0", "mcsrr1", "mcsr", "mcar", "dsrr0",
+  "dsrr1", "dbcr6", "sprg8", "sprg9", "mas0", "mas1", "mas2",
+  "mas3", "mas4", "mas6", "tlb0cfg", "tlb1cfg", "l1finv1",
+  "hid0", "hid1", "l1csr0", "l1csr1", "mmucsr0", "bucsr",
+  "mmucfg", "l1finv0", "svr", "tir", "npidr", "ddam", "dac3", "dac4",
+  "dbcr7", "dbcr8", "ddear", "dvc1u", "dvc2u", "edbrac0", "dmemcfg0",
+  "imemcfg0", "devent","sir", "mpu0cfg", "mpu0csr0", "l1csr2",
+  "usprg4", "usprg5", "usprg6", "usprg7"
+  };
+
 
 /* A variable that can be configured by the user.  */
 static enum powerpc_vector_abi powerpc_vector_abi_global = POWERPC_VEC_AUTO;
@@ -150,6 +179,18 @@ struct rs6000_framedata
     int vrsave_offset;          /* offset of saved vrsave register */
   };
 
+
+/* Is REGNO a SPR register? Return 1 if so, 0 otherwise.  */
+int
+spr_register_p (struct gdbarch *gdbarch, int regno)
+{
+  struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
+  if (tdep->ppc_spr_pseudo_regnum < 0)
+    return 0;
+  else
+    return (regno >= tdep->ppc_spr_regnum &&
+	    regno < tdep->ppc_spr_regnum + ppc_num_sprs);
+}
 
 /* Is REGNO a VSX register? Return 1 if so, 0 otherwise.  */
 int
@@ -867,6 +908,224 @@ insn_changes_sp_or_jumps (unsigned long insn)
   return 0;
 }
 
+#define SIGNED_SHORT(x) 						\
+  ((sizeof (short) == 2)						\
+   ? ((int)(short)(x))							\
+   : ((int)((((x) & 0xffff) ^ 0x8000) - 0x8000)))
+
+#define SIGNED_BYTE(x) ((int)(char)(x))
+
+#define GET_SRC_REG(x) (((x) >> 21) & 0x1f)
+
+/* The main opcode.  */
+#define OP(x) ((((unsigned long)(x)) & 0x3f) << 26)
+#define OP_MASK OP (0x3f)
+
+/* The main opcode combined with an update code in D form instruction.
+   Used for extended mnemonics for VLE memory instructions.  */
+#define OPVUP(x,vup) (OP (x) | ((((unsigned long)(vup)) & 0xff) << 8))
+#define OPVUP_MASK OPVUP (0x3f,  0xff)
+
+/* A VLE C form instruction.  */
+#define C_LK(x, lk) (((((unsigned long)(x)) & 0x7fff) << 1) | ((lk) & 1))
+#define C_LK_MASK C_LK(0x7fff, 1)
+#define C(x) ((((unsigned long)(x)) & 0xffff))
+#define C_MASK C(0xffff)
+
+/* A BD8 form instruction.  This is a 16-bit instruction.  */
+#define BD8(op, aa, lk)\
+  (((((unsigned long)(op)) & 0x3f) << 10) \
+   | (((aa) & 1) << 9) | (((lk) & 1) << 8))
+#define BD8_MASK BD8 (0x3f, 1, 1)
+
+/* Another BD8 form instruction.  This is a 16-bit instruction.  */
+#define BD8IO(op) ((((unsigned long)(op)) & 0x1f) << 11)
+#define BD8IO_MASK BD8IO (0x1f)
+
+/* A BD15 form instruction.  */
+#define BD15(op, aa, lk) \
+  (OP (op) | ((((unsigned long)(aa)) & 0xf) << 22) | ((lk) & 1))
+#define BD15_MASK BD15 (0x3f, 0xf, 1)
+
+/* A BD15 form instruction for extended conditional branch mnemonics.  */
+#define EBD15(op, aa, bo, lk) \
+  ((((op) & 0x3f) << 26) \
+   | (((aa) & 0xf) << 22) \
+   | (((bo) & 0x3) << 20) \
+   | ((lk) & 1))
+#define EBD15_MASK 0xfff00000
+#define EBD15L_MASK 0xfff00001
+
+/* A BD15 form instruction for extended conditional branch mnemonics
+   with BI.  */
+#define EBD15BI(op, aa, bo, bi, lk) ((((op) & 0x3f) << 26) \
+				    | (((aa) & 0xf) << 22) \
+				    | (((bo) & 0x3) << 20) \
+				    | (((bi) & 0x3) << 16) \
+				     | ((lk) & 1))
+#define EBD15BI_MASK  0xfff30000
+#define EBD15BIL_MASK 0xfff30001
+
+/* A BD24 form instruction.  */
+#define BD24(op, aa, lk) \
+  (OP (op) | ((((unsigned long)(aa)) & 1) << 25) | ((lk) & 1))
+#define BD24_MASK BD24 (0x3f, 1, 1)
+
+/* An SE_R form instruction.  This is a 16-bit instruction.  */
+#define SE_R(op, xop) \
+  (((((unsigned long)(op)) & 0x3f) << 10) | (((xop) & 0x3f) << 4))
+#define SE_R_MASK SE_R(0x3f, 0x3f)
+
+/* An SE_RR form instruction.  This is a 16-bit instruction.  */
+#define SE_RR(op, xop) \
+  (((((unsigned long)(op)) & 0x3f) << 10) | (((xop) & 0x3) << 8))
+#define SE_RR_MASK SE_RR(0x3f, 3)
+
+/* The BO16 encodings used in extended VLE conditional branch mnemonics.  */
+#define BO16F	(0x0)
+#define BO16T	(0x1)
+
+/* The BO32 encodings used in extended VLE conditional branch mnemonics.  */
+#define BO32F	(0x0)
+#define BO32T	(0x1)
+#define BO32DNZ	(0x2)
+#define BO32DZ	(0x3)
+
+/* The BI condition bit encodings used in extended conditional branch
+   mnemonics.  */
+#define CBLT	(0)
+#define CBGT	(1)
+#define CBEQ	(2)
+#define CBSO	(3)
+
+/* Extract the RX field of an SE_RR form instruction.  */
+
+static long
+extract_rx (unsigned long insn)
+{
+  int value = insn & 0xf;
+  if (value >= 0 && value < 8)
+    return value;
+  else
+    return value + 16;
+}
+
+/* Extract the RY field of an SE_RR form instruction.  */
+
+static long
+extract_ry (unsigned long insn)
+{
+  int value = (insn >> 4) & 0xf;
+  if (value >= 0 && value < 8)
+    return value;
+  else
+    return value + 16;
+}
+
+/* Return true if PC points at code encoded with VLE.  */
+
+/* Extract the B15 field of a BD15 form instruction.  The lowest bit
+   is forced to zero.  */
+
+static long
+extract_b15 (unsigned long insn)
+{
+  /* Sign-extend the branch displacement.  */
+
+  long se_val = (insn >> 1) & 0x7fff;
+  if (se_val & 0x4000)
+    se_val |= ~0x7fff;
+  return se_val << 1;
+}
+
+/* Extract the B8 field of a BD8 form instruction.  */
+
+static long
+extract_b8 (unsigned short insn)
+{
+  /* Sign-extend the branch displacement.  */
+
+  long se_val = (insn & 0xff);
+  if (se_val & 0x80)
+    se_val |= ~0xff;
+  return se_val << 1;
+}
+
+static int
+ppc_pc_is_vle (CORE_ADDR pc)
+{
+#ifdef HAVE_ELF
+  struct target_section *secp;
+
+  secp = target_section_by_addr (&current_target, pc);
+  if (secp != NULL
+      && bfd_get_flavour (secp->the_bfd_section->owner) == bfd_target_elf_flavour
+      && (elf_section_flags (secp->the_bfd_section) & SHF_PPC_VLE) != 0)
+    return 1;
+
+  /* Look at segment of PC for PF_PPC_VLE?  */
+#endif
+
+  return 0;
+}
+
+static int
+ppc_insn_length (unsigned long insn, CORE_ADDR addr, struct gdbarch *gdbarch,
+		 int vle)
+{
+  if (vle)
+    {
+      enum bfd_endian byte_order = gdbarch_byte_order_for_code (gdbarch);
+      gdb_byte buf[4];
+
+      store_unsigned_integer (buf, 4, byte_order, insn);
+      return gdb_buffered_insn_length (gdbarch, buf, 4, addr);
+    }
+  else
+    return 4;
+}
+
+static unsigned long
+rs6000_fetch_instruction (struct gdbarch *gdbarch, const CORE_ADDR pc, int vle)
+{
+  enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
+  gdb_byte buf[4];
+  unsigned long op;
+
+  /* Fetch the instruction and convert it to an integer.  */
+  if (target_read_memory (pc, buf, 4))
+    {
+      /* The final instruction may be a 2-byte VLE insn.  */
+      if (!vle)
+	return 0;
+
+      /* Clear buffer so unused bytes will not have garbage in
+	 them.  */
+      memset (buf, 0, 4);
+      if (target_read_memory (pc, buf, 2))
+	return 0;
+    }
+
+  op = extract_unsigned_integer (buf, 4, byte_order);
+
+  return op;
+}
+
+/* Like rs6000_fetch_instruction, but report an error if can't
+   read.  */
+
+static unsigned long
+read_instruction (struct gdbarch *gdbarch, const CORE_ADDR pc, int vle)
+{
+  unsigned long insn;
+
+  insn = rs6000_fetch_instruction (gdbarch, pc, vle);
+  if (!insn)
+    memory_error (TARGET_XFER_ILLEGAL, pc);
+
+  return insn;
+}
+
 /* Return true if we are in the function's epilogue, i.e. after the
    instruction that destroyed the function's stack frame.
 
@@ -893,6 +1152,11 @@ rs6000_in_function_epilogue_frame_p (struct frame_info *curfrm,
   bfd_byte insn_buf[PPC_INSN_SIZE];
   CORE_ADDR scan_pc, func_start, func_end, epilogue_start, epilogue_end;
   unsigned long insn;
+
+  /* The algorithm scans the instruction stream backwards, which can't
+     work in VLE.  */
+  if (ppc_pc_is_vle (pc))
+    return 0;
 
   /* Find the search limits based on function boundaries and hard limit.  */
 
@@ -968,6 +1232,9 @@ static const unsigned char *
 rs6000_breakpoint_from_pc (struct gdbarch *gdbarch, CORE_ADDR *bp_addr,
 			   int *bp_size)
 {
+  /* Use trap opcode for internal debug
+     VLE encoding is identical to PPC mode (32-bit)
+     There is no 16-bit trap instruction - so this case is not handled */
   static unsigned char big_breakpoint[] = { 0x7d, 0x82, 0x10, 0x08 };
   static unsigned char little_breakpoint[] = { 0x08, 0x10, 0x82, 0x7d };
   *bp_size = 4;
@@ -975,6 +1242,35 @@ rs6000_breakpoint_from_pc (struct gdbarch *gdbarch, CORE_ADDR *bp_addr,
     return big_breakpoint;
   else
     return little_breakpoint;
+}
+
+static void
+rs6000_remote_breakpoint_from_pc (struct gdbarch *gdbarch, CORE_ADDR *pcptr,
+			       int *kindptr)
+{
+  int vle = ppc_pc_is_vle (*pcptr);
+  unsigned long insn;
+  int insn_length;
+
+  if (!vle)
+  {
+    *kindptr = 4;
+  }
+  else
+  {
+    insn = read_instruction (gdbarch, *pcptr, vle);
+    insn_length = ppc_insn_length (insn, *pcptr, gdbarch, vle);
+    if (insn_length == 2)
+    {
+        *kindptr = 2;
+    }
+    else
+    {
+        /* The documented magic value for a 32-bit VLE breakpoint, so
+           that this is not confused with a 32-bit PPC breakpoint.  */
+        *kindptr = 3;
+    }
+  }
 }
 
 /* Instruction masks for displaced stepping.  */
@@ -1007,6 +1303,12 @@ ppc_displaced_step_copy_insn (struct gdbarch *gdbarch,
   struct cleanup *old_chain = make_cleanup (xfree, buf);
   enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
   int insn;
+  int from_vle = ppc_pc_is_vle (from);
+  int to_vle = ppc_pc_is_vle (to);
+
+  if (from_vle != to_vle)
+    error (_("Can't execute a VLE instruction out of line on a "
+	     "non-VLE scratch area (or vice-versa)."));
 
   read_memory (from, buf, len);
 
@@ -1052,6 +1354,9 @@ ppc_displaced_step_fixup (struct gdbarch *gdbarch,
   /* Our closure is a copy of the instruction.  */
   ULONGEST insn  = extract_unsigned_integer ((gdb_byte *) closure,
 					      PPC_INSN_SIZE, byte_order);
+  int insn_length;
+  int vle = ppc_pc_is_vle (from);
+  
   ULONGEST opcode = 0;
   /* Offset for non PC-relative instructions.  */
   LONGEST offset = PPC_INSN_SIZE;
@@ -1064,10 +1369,22 @@ ppc_displaced_step_fixup (struct gdbarch *gdbarch,
 			paddress (gdbarch, from), paddress (gdbarch, to));
 
 
+  insn_length = ppc_insn_length (insn, from, gdbarch, vle);
   /* Handle PC-relative branch instructions.  */
-  if (opcode == B_INSN || opcode == BC_INSN || opcode == BXL_INSN)
+  if (vle
+      ? ((insn & BD24_MASK) == BD24(30,0,0) /* e_b */
+	 || (insn & BD24_MASK) == BD24(30,0,1) /* e_bl */
+	 || (insn & BD15_MASK) == BD15(30,8,0) /* e_bc */
+	 || (insn & BD15_MASK) == BD15(30,8,1) /* e_bcl */
+	 || ((insn >> 16) & BD8_MASK) == BD8(58,0,0) /* se_b */
+	 || ((insn >> 16) & BD8_MASK) == BD8(58,0,1) /* se_bl */
+	 || ((insn >> 16) & BD8IO_MASK) == BD8IO(28)) /* se_bc */
+      : ((insn & BRANCH_MASK) == B_INSN
+	 || (insn & BRANCH_MASK) == BC_INSN
+	 || (insn & BRANCH_MASK) == BXL_INSN))
     {
       ULONGEST current_pc;
+      LONGEST offset;
 
       /* Read the current PC value after the instruction has been executed
 	 in a displaced location.  Calculate the offset to be applied to the
@@ -1076,7 +1393,23 @@ ppc_displaced_step_fixup (struct gdbarch *gdbarch,
 				      &current_pc);
       offset = current_pc - to;
 
-      if (opcode != BXL_INSN)
+      if (vle
+	  ? ((insn & BD24_MASK) == BD24(30,0,1) /* e_bl */
+	     || (insn & BD15_MASK) == BD15(30,8,1) /* e_bcl */
+	     || ((insn >> 16) & BD8_MASK) == BD8(58,0,1)) /* se_bl */
+	  : ((insn & BRANCH_MASK) == BXL_INSN))
+	{
+	  /* If we're here, it means we have a branch to LR or CTR.
+	     If the branch was taken, the offset is probably greater
+	     than the branch instruction length (the next
+	     instruction), so it's safe to assume that an offset
+	     exactly the branch's length means we did not take the
+	     branch.  */
+	  if (offset == insn_length)
+	    regcache_cooked_write_unsigned (regs, gdbarch_pc_regnum (gdbarch),
+					    from + insn_length);
+	}
+      else if (!vle)
 	{
 	  /* Check for AA bit indicating whether this is an absolute
 	     addressing or PC-relative (1: absolute, 0: relative).  */
@@ -1110,16 +1443,20 @@ ppc_displaced_step_fixup (struct gdbarch *gdbarch,
       /* Check for LK bit indicating whether we should set the link
 	 register to point to the next instruction
 	 (1: Set, 0: Don't set).  */
-      if (insn & 0x1)
+      if ((insn_length == 4 && (insn & 0x1)) /* vle && !vle */
+	  || (insn_length == 2
+	      && ((((insn >> 16) & BD8_MASK) == BD8(58,0,0) /* se_b */
+		   || ((insn >> 16) & BD8_MASK) == BD8(58,0,1)) /* se_bl */
+		  && (insn >> 16) & (1 << 8))))
 	{
 	  /* Link register needs to be set to the next instruction's PC.  */
 	  regcache_cooked_write_unsigned (regs,
 					  gdbarch_tdep (gdbarch)->ppc_lr_regnum,
-					  from + PPC_INSN_SIZE);
+					  from + insn_length);
 	  if (debug_displaced)
 		fprintf_unfiltered (gdb_stdlog,
 				    "displaced: (ppc) adjusted LR to %s\n",
-				    paddress (gdbarch, from + PPC_INSN_SIZE));
+				paddress (gdbarch, from + insn_length));
 
 	}
     }
@@ -1130,7 +1467,7 @@ ppc_displaced_step_fixup (struct gdbarch *gdbarch,
   else
   /* Handle any other instructions that do not fit in the categories above.  */
     regcache_cooked_write_unsigned (regs, gdbarch_pc_regnum (gdbarch),
-				    from + offset);
+				    from + insn_length);
 }
 
 /* Always use hardware single-stepping to execute the
@@ -1157,29 +1494,57 @@ ppc_deal_with_atomic_sequence (struct frame_info *frame)
   CORE_ADDR breaks[2] = {-1, -1};
   CORE_ADDR loc = pc;
   CORE_ADDR closing_insn; /* Instruction that closes the atomic sequence.  */
-  int insn = read_memory_integer (loc, PPC_INSN_SIZE, byte_order);
+  unsigned long insn;
   int insn_count;
   int index;
   int last_breakpoint = 0; /* Defaults to 0 (no breakpoints placed).  */  
   const int atomic_sequence_length = 16; /* Instruction sequence length.  */
   int opcode; /* Branch instruction's OPcode.  */
   int bc_insn_count = 0; /* Conditional branch instruction count.  */
+  int prev_insn_len;
+  int vle;
+
+  vle = ppc_pc_is_vle (pc);
+  insn = read_instruction (gdbarch, loc, vle);
 
   /* Assume all atomic sequences start with a lwarx/ldarx instruction.  */
   if ((insn & LWARX_MASK) != LWARX_INSTRUCTION
       && (insn & LWARX_MASK) != LDARX_INSTRUCTION)
     return 0;
 
+  prev_insn_len = PPC_INSN_SIZE;
+
   /* Assume that no atomic sequence is longer than "atomic_sequence_length" 
      instructions.  */
   for (insn_count = 0; insn_count < atomic_sequence_length; ++insn_count)
     {
-      loc += PPC_INSN_SIZE;
-      insn = read_memory_integer (loc, PPC_INSN_SIZE, byte_order);
+      int got_condition_branch = 0;
+      CORE_ADDR branch_dest;
 
-      /* Assume that there is at most one conditional branch in the atomic
-         sequence.  If a conditional branch is found, put a breakpoint in 
-         its destination address.  */
+      loc += prev_insn_len;
+      insn = read_instruction (gdbarch, loc, vle);
+
+      /* Assume that there is at most one conditional branch in the
+	 atomic sequence.  If a conditional branch is found, put a
+	 breakpoint in its destination address.  If more than one
+	 conditional branch is found, fallback to the standard
+	 single-step code.  */
+      if (vle)
+	{
+	  if ((insn & BD15_MASK) == BD15(30,8,0) /* e_bc */
+	      || (insn & BD15_MASK) == BD15(30,8,1)) /* e_bcl */
+	    {
+	      breaks[1] = pc + extract_b15 (insn);
+got_condition_branch = 1;
+	    }
+	  else if (((insn >> 16) & BD8IO_MASK) == BD8IO(28)) /* se_bc */
+	    {
+	      branch_dest = pc + extract_b8 (insn >> 16);
+got_condition_branch = 1;
+	    }
+	}
+      else
+	{
       if ((insn & BRANCH_MASK) == BC_INSN)
         {
           int immediate = ((insn & 0xfffc) ^ 0x8000) - 0x8000;
@@ -1190,17 +1555,28 @@ ppc_deal_with_atomic_sequence (struct frame_info *frame)
                          to the standard single-step code.  */
  
 	  if (absolute)
-	    breaks[1] = immediate;
+		branch_dest = immediate;
 	  else
-	    breaks[1] = loc + immediate;
+		branch_dest = pc + immediate;
 
+	      got_condition_branch = 1;
+	    }
+	}
+
+      if (got_condition_branch)
+	{
+	  if (bc_insn_count >= 1)
+	    return 0;
 	  bc_insn_count++;
 	  last_breakpoint++;
+	  breaks[1] = branch_dest;
         }
 
       if ((insn & STWCX_MASK) == STWCX_INSTRUCTION
           || (insn & STWCX_MASK) == STDCX_INSTRUCTION)
         break;
+
+      prev_insn_len = ppc_insn_length (vle, insn, gdbarch, loc);
     }
 
   /* Assume that the atomic sequence ends with a stwcx/stdcx instruction.  */
@@ -1241,15 +1617,36 @@ ppc_deal_with_atomic_sequence (struct frame_info *frame)
    of the prologue is expensive.  */
 static int max_skip_non_prologue_insns = 10;
 
-/* Return nonzero if the given instruction OP can be part of the prologue
-   of a function and saves a parameter on the stack.  FRAMEP should be
-   set if one of the previous instructions in the function has set the
-   Frame Pointer.  */
+/* Return nonzero if the given instruction OP can be part of the
+   prologue of a function and saves a parameter on the stack.  FRAMEP
+   should be set if one of the previous instructions in the function
+   has set the Frame Pointer.  VLE is true if OP is VLE encoded.
+   *INSN_LEN is set to the instruction length.  */
 
 static int
-store_param_on_stack_p (unsigned long op, int framep, int *r0_contains_arg)
+store_param_on_stack_p (unsigned long op, int framep, int *r0_contains_arg,
+			int vle, int *insn_len)
 {
+  /* Assume 32-bit insn by default.  */
+  *insn_len = 4;
+
   /* Move parameters from argument registers to temporary register.  */
+  if (vle && ((op >> 16) & SE_RR_MASK) == SE_RR (0,1))     /* se_mr rX,rY */
+    {
+      /* Rx must be scratch register r0.  */
+      const int rx_regno = extract_rx (op >> 16);
+      /* Ry: Only r3 - r10 are used for parameter passing.  */
+      const int ry_regno = extract_ry (op >> 16);
+
+      if (rx_regno == 0 && ry_regno >= 3 && ry_regno <= 10)
+        {
+          *r0_contains_arg = 1;
+	  *insn_len = 2;
+	  return 1;
+	}
+      else
+	return 0;
+    }
   if ((op & 0xfc0007fe) == 0x7c000378)         /* mr(.)  Rx,Ry */
     {
       /* Rx must be scratch register r0.  */
@@ -1267,9 +1664,17 @@ store_param_on_stack_p (unsigned long op, int framep, int *r0_contains_arg)
     }
 
   /* Save a General Purpose Register on stack.  */
+  if (vle && (op & (OP_MASK | (0x1f << 16))) == (OP (21) | (1 << 16)))
+    {
+      /* e_stw rS,D(r1) (D-mode) */
+      /* rS: Only r3 - r10 are used for parameter passing.  */
+      const int rS_regno = (op >> 21) & 0x1f;
 
-  if ((op & 0xfc1f0003) == 0xf8010000 ||       /* std  Rx,NUM(r1) */
-      (op & 0xfc1f0000) == 0xd8010000)         /* stfd Rx,NUM(r1) */
+      return (rS_regno >= 3 && rS_regno <= 10);
+    }
+  if (!vle
+      && ((op & 0xfc1f0003) == 0xf8010000             /* std  Rx,NUM(r1) */
+	  || (op & 0xfc1f0000) == 0xd8010000))        /* stfd Rx,NUM(r1) */
     {
       /* Rx: Only r3 - r10 are used for parameter passing.  */
       const int rx_regno = GET_SRC_REG (op);
@@ -1278,8 +1683,21 @@ store_param_on_stack_p (unsigned long op, int framep, int *r0_contains_arg)
     }
            
   /* Save a General Purpose Register on stack via the Frame Pointer.  */
+  if (framep && vle
+      /* e_stw rS,D(r31) (D-mode) */
+      && ((op & (OP_MASK | (0x1f << 16))) == (OP (21) | (0x1f << 16))
+	  /* e_stb rS,D(r31) (D-mode) */
+	  || (op & (OP_MASK | (0x1f << 16))) == (OP (13) | (0x1f << 16))))
+    {
 
-  if (framep &&
+      /* rS: Usually, only r3 - r10 are used for parameter passing.
+         However, the compiler sometimes uses r0 to hold an argument.  */
+      const int rS_regno = (op >> 21) & 0x1f;
+
+      return ((rS_regno >= 3 && rS_regno <= 10)
+	      || (rS_regno == 0 && *r0_contains_arg));
+    }
+  if (framep && !vle &&
       ((op & 0xfc1f0000) == 0x901f0000 ||     /* st rx,NUM(r31) */
        (op & 0xfc1f0000) == 0x981f0000 ||     /* stb Rx,NUM(r31) */
        (op & 0xfc1f0000) == 0xd81f0000))      /* stfd Rx,NUM(r31) */
@@ -1292,7 +1710,7 @@ store_param_on_stack_p (unsigned long op, int framep, int *r0_contains_arg)
               || (rx_regno == 0 && *r0_contains_arg));
     }
 
-  if ((op & 0xfc1f0000) == 0xfc010000)         /* frsp, fp?,NUM(r1) */
+  if (!vle && (op & 0xfc1f0000) == 0xfc010000)         /* frsp, fp?,NUM(r1) */
     {
       /* Only f2 - f8 are used for parameter passing.  */
       const int src_regno = GET_SRC_REG (op);
@@ -1300,7 +1718,8 @@ store_param_on_stack_p (unsigned long op, int framep, int *r0_contains_arg)
       return (src_regno >= 2 && src_regno <= 8);
     }
 
-  if (framep && ((op & 0xfc1f0000) == 0xfc1f0000))  /* frsp, fp?,NUM(r31) */
+  if (!vle && framep
+      && ((op & 0xfc1f0000) == 0xfc1f0000))  /* frsp, fp?,NUM(r31) */
     {
       /* Only f2 - f8 are used for parameter passing.  */
       const int src_regno = GET_SRC_REG (op);
@@ -1355,20 +1774,6 @@ bl_to_blrl_insn_p (CORE_ADDR pc, int insn, enum bfd_endian byte_order)
 #define BL_INSTRUCTION 0x48000001
 #define BL_DISPLACEMENT_MASK 0x03fffffc
 
-static unsigned long
-rs6000_fetch_instruction (struct gdbarch *gdbarch, const CORE_ADDR pc)
-{
-  enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
-  gdb_byte buf[4];
-  unsigned long op;
-
-  /* Fetch the instruction and convert it to an integer.  */
-  if (target_read_memory (pc, buf, 4))
-    return 0;
-  op = extract_unsigned_integer (buf, 4, byte_order);
-
-  return op;
-}
 
 /* GCC generates several well-known sequences of instructions at the begining
    of each function prologue when compiling with -fstack-check.  If one of
@@ -1376,10 +1781,16 @@ rs6000_fetch_instruction (struct gdbarch *gdbarch, const CORE_ADDR pc)
    instruction immediately past this sequence.  Otherwise, return START_PC.  */
    
 static CORE_ADDR
-rs6000_skip_stack_check (struct gdbarch *gdbarch, const CORE_ADDR start_pc)
+rs6000_skip_stack_check (struct gdbarch *gdbarch, const CORE_ADDR start_pc,
+			 int vle)
 {
   CORE_ADDR pc = start_pc;
-  unsigned long op = rs6000_fetch_instruction (gdbarch, pc);
+  unsigned long op = rs6000_fetch_instruction (gdbarch, pc, vle);
+
+  /* FIXME, compiler doesn't know how to -fstack-check for VLE
+     yet.  */
+  if (vle)
+    return pc;
 
   /* First possible sequence: A small number of probes.
          stw 0, -<some immediate>(1)
@@ -1390,7 +1801,7 @@ rs6000_skip_stack_check (struct gdbarch *gdbarch, const CORE_ADDR start_pc)
       while ((op & 0xffff0000) == 0x90010000)
         {
           pc = pc + 4;
-          op = rs6000_fetch_instruction (gdbarch, pc);
+	   op = rs6000_fetch_instruction (gdbarch, pc, vle);
         }
       return pc;
     }
@@ -1415,17 +1826,17 @@ rs6000_skip_stack_check (struct gdbarch *gdbarch, const CORE_ADDR start_pc)
 
       /* lis 0,-<some immediate> */
       pc = pc + 4;
-      op = rs6000_fetch_instruction (gdbarch, pc);
+      op = rs6000_fetch_instruction (gdbarch, pc, vle);
       if ((op & 0xffff0000) != 0x3c000000)
         break;
 
       pc = pc + 4;
-      op = rs6000_fetch_instruction (gdbarch, pc);
+      op = rs6000_fetch_instruction (gdbarch, pc, vle);
       /* [possibly ori 0,0,<some immediate>] */
       if ((op & 0xffff0000) == 0x60000000)
         {
           pc = pc + 4;
-          op = rs6000_fetch_instruction (gdbarch, pc);
+	   op = rs6000_fetch_instruction (gdbarch, pc, vle);
         }
       /* add 0,12,0 */
       if (op != 0x7c0c0214)
@@ -1433,41 +1844,41 @@ rs6000_skip_stack_check (struct gdbarch *gdbarch, const CORE_ADDR start_pc)
 
       /* cmpw 0,12,0 */
       pc = pc + 4;
-      op = rs6000_fetch_instruction (gdbarch, pc);
+      op = rs6000_fetch_instruction (gdbarch, pc, vle);
       if (op != 0x7c0c0000)
         break;
 
       /* beq 0,<disp> */
       pc = pc + 4;
-      op = rs6000_fetch_instruction (gdbarch, pc);
+      op = rs6000_fetch_instruction (gdbarch, pc, vle);
       if ((op & 0xff9f0001) != 0x41820000)
         break;
 
       /* addi 12,12,-<some immediate> */
       pc = pc + 4;
-      op = rs6000_fetch_instruction (gdbarch, pc);
+      op = rs6000_fetch_instruction (gdbarch, pc, vle);
       if ((op & 0xffff0000) != 0x398c0000)
         break;
 
       /* stw 0,0(12) */
       pc = pc + 4;
-      op = rs6000_fetch_instruction (gdbarch, pc);
+      op = rs6000_fetch_instruction (gdbarch, pc, vle);
       if (op != 0x900c0000)
         break;
 
       /* b <disp> */
       pc = pc + 4;
-      op = rs6000_fetch_instruction (gdbarch, pc);
+      op = rs6000_fetch_instruction (gdbarch, pc, vle);
       if ((op & 0xfc000001) != 0x48000000)
         break;
 
       /* [possibly one last probe: stw 0,<some immediate>(12)].  */
       pc = pc + 4;
-      op = rs6000_fetch_instruction (gdbarch, pc);
+      op = rs6000_fetch_instruction (gdbarch, pc, vle);
       if ((op & 0xffff0000) == 0x900c0000)
         {
           pc = pc + 4;
-          op = rs6000_fetch_instruction (gdbarch, pc);
+	   op = rs6000_fetch_instruction (gdbarch, pc, vle);
         }
 
       /* We found a valid stack-check sequence, return the new PC.  */
@@ -1504,26 +1915,26 @@ rs6000_skip_stack_check (struct gdbarch *gdbarch, const CORE_ADDR start_pc)
 
           /* addic 0,0,-<some immediate> */
           pc = pc + 4;
-          op = rs6000_fetch_instruction (gdbarch, pc);
+	  op = rs6000_fetch_instruction (gdbarch, pc, vle);
           if ((op & 0xffff0000) != 0x30000000)
             break;
         }
 
       /* lis 12,<some immediate> */
       pc = pc + 4;
-      op = rs6000_fetch_instruction (gdbarch, pc);
+      op = rs6000_fetch_instruction (gdbarch, pc, vle);
       if ((op & 0xffff0000) != 0x3d800000)
         break;
       
       /* lwz 12,<some immediate>(12) */
       pc = pc + 4;
-      op = rs6000_fetch_instruction (gdbarch, pc);
+      op = rs6000_fetch_instruction (gdbarch, pc, vle);
       if ((op & 0xffff0000) != 0x818c0000)
         break;
 
       /* twllt 0,12 */
       pc = pc + 4;
-      op = rs6000_fetch_instruction (gdbarch, pc);
+      op = rs6000_fetch_instruction (gdbarch, pc, vle);
       if ((op & 0xfffffffe) != 0x7c406008)
         break;
 
@@ -1583,6 +1994,8 @@ skip_prologue (struct gdbarch *gdbarch, CORE_ADDR pc, CORE_ADDR lim_pc,
   const struct bfd_arch_info *arch_info = gdbarch_bfd_arch_info (gdbarch);
   struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
   enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
+  int vle;
+  int insn_len;
 
   memset (fdata, 0, sizeof (struct rs6000_framedata));
   fdata->saved_gpr = -1;
@@ -1594,11 +2007,15 @@ skip_prologue (struct gdbarch *gdbarch, CORE_ADDR pc, CORE_ADDR lim_pc,
   fdata->nosavedpc = 1;
   fdata->lr_register = -1;
 
-  pc = rs6000_skip_stack_check (gdbarch, pc);
+  vle = ppc_pc_is_vle (pc);
+
+  pc = rs6000_skip_stack_check (gdbarch, pc, vle);
   if (pc >= lim_pc)
     pc = lim_pc;
 
-  for (;; pc += 4)
+  /* Default to assuming 4 bytes insn.  */
+  insn_len = 4;
+  for (;; pc += insn_len)
     {
       /* Sometimes it isn't clear if an instruction is a prologue
          instruction or not.  When we encounter one of these ambiguous
@@ -1614,11 +2031,21 @@ skip_prologue (struct gdbarch *gdbarch, CORE_ADDR pc, CORE_ADDR lim_pc,
       prev_insn_was_prologue_insn = 1;
 
       /* Fetch the instruction and convert it to an integer.  */
-      if (target_read_memory (pc, buf, 4))
+      op = rs6000_fetch_instruction (gdbarch, pc, vle);
+      if (op == 0)
 	break;
-      op = extract_unsigned_integer (buf, 4, byte_order);
 
-      if ((op & 0xfc1fffff) == 0x7c0802a6)
+      if (vle && ((op >> 16) & SE_R_MASK) == SE_R (0,8))
+	{			/* se_mflr Rx */
+	  /* See the non-VLE variant below.  */
+	  if (lr_reg == -1)
+	    lr_reg = extract_rx (op >> 16);
+	  if (lr_reg == 0)
+	    r0_contains_arg = 0;
+	  insn_len = 2;
+	  continue;
+	}
+      else if (!vle && (op & 0xfc1fffff) == 0x7c0802a6)
 	{			/* mflr Rx */
 	  /* Since shared library / PIC code, which needs to get its
 	     address at runtime, can appear to save more than one link
@@ -1644,14 +2071,14 @@ skip_prologue (struct gdbarch *gdbarch, CORE_ADDR pc, CORE_ADDR lim_pc,
 	  continue;
 	}
       else if ((op & 0xfc1fffff) == 0x7c000026)
-	{			/* mfcr Rx */
+	{			/* mfcr Rx  (same encoding in VLE) */
 	  cr_reg = (op & 0x03e00000);
           if (cr_reg == 0)
             r0_contains_arg = 0;
 	  continue;
 
 	}
-      else if ((op & 0xfc1f0000) == 0xd8010000)
+      else if (!vle && (op & 0xfc1f0000) == 0xd8010000)
 	{			/* stfd Rx,NUM(r1) */
 	  reg = GET_SRC_REG (op);
 	  if (fdata->saved_fpr == -1 || fdata->saved_fpr > reg)
@@ -1662,14 +2089,15 @@ skip_prologue (struct gdbarch *gdbarch, CORE_ADDR pc, CORE_ADDR lim_pc,
 	  continue;
 
 	}
-      else if (((op & 0xfc1f0000) == 0xbc010000) ||	/* stm Rx, NUM(r1) */
-	       (((op & 0xfc1f0000) == 0x90010000 ||	/* st rx,NUM(r1) */
-		 (op & 0xfc1f0003) == 0xf8010000) &&	/* std rx,NUM(r1) */
-		(op & 0x03e00000) >= 0x01a00000))	/* rx >= r13 */
+      else if (!vle
+	       && (((op & 0xfc1f0000) == 0xbc010000)	/* stm Rx, NUM(r1) */
+		   || (((op & 0xfc1f0000) == 0x90010000	/* st rx,NUM(r1) */
+			||  (op & 0xfc1f0003) == 0xf8010000)	/* std rx,NUM(r1) */
+		       && (op & 0x03e00000) >= 0x01a00000)))	/* rx >= r13 */
 	{
 
 	  reg = GET_SRC_REG (op);
-	  if ((op & 0xfc1f0000) == 0xbc010000)
+	  if ((op & 0xfc1f0000) == 0xbc010000) /* stm Rx, NUM(r1) */
 	    fdata->gpr_mask |= ~((1U << reg) - 1);
 	  else
 	    fdata->gpr_mask |= 1U << reg;
@@ -1683,9 +2111,9 @@ skip_prologue (struct gdbarch *gdbarch, CORE_ADDR pc, CORE_ADDR lim_pc,
 	  continue;
 
 	}
-      else if ((op & 0xffff0000) == 0x3c4c0000
+      else if (!vle && ((op & 0xffff0000) == 0x3c4c0000
 	       || (op & 0xffff0000) == 0x3c400000
-	       || (op & 0xffff0000) == 0x38420000)
+	       || (op & 0xffff0000) == 0x38420000))
 	{
 	  /* .	0:	addis 2,12,.TOC.-0b@ha
 	     .		addi 2,2,.TOC.-0b@l
@@ -1695,9 +2123,9 @@ skip_prologue (struct gdbarch *gdbarch, CORE_ADDR pc, CORE_ADDR lim_pc,
 	     used by ELFv2 global entry points to set up r2.  */
 	  continue;
 	}
-      else if (op == 0x60000000)
+      else if ((op & 0xffff0000) == 0x60000000)
         {
-	  /* nop */
+	  /* nop (same in VLE) */
 	  /* Allow nops in the prologue, but do not consider them to
 	     be part of the prologue unless followed by other prologue
 	     instructions.  */
@@ -1705,7 +2133,7 @@ skip_prologue (struct gdbarch *gdbarch, CORE_ADDR pc, CORE_ADDR lim_pc,
 	  continue;
 
 	}
-      else if ((op & 0xffff0000) == 0x3c000000)
+      else if (!vle && (op & 0xffff0000) == 0x3c000000)
 	{			/* addis 0,0,NUM, used for >= 32k frames */
 	  fdata->offset = (op & 0x0000ffff) << 16;
 	  fdata->frameless = 0;
@@ -1713,15 +2141,90 @@ skip_prologue (struct gdbarch *gdbarch, CORE_ADDR pc, CORE_ADDR lim_pc,
 	  continue;
 
 	}
-      else if ((op & 0xffff0000) == 0x60000000)
+      else if (!vle && (op & 0xffff0000) == 0x60000000)
 	{			/* ori 0,0,NUM, 2nd half of >= 32k frames */
 	  fdata->offset |= (op & 0x0000ffff);
 	  fdata->frameless = 0;
           r0_contains_arg = 0;
 	  continue;
-
 	}
-      else if (lr_reg >= 0 &&
+      else if (vle
+	       /* e_stw rS, D(r1) */
+	       && ((op & (OP_MASK | 0x1f << 16)) == (OP (21) | (1 << 16))))
+	{
+	  int rs = GET_SRC_REG (op);
+
+	  if (lr_reg == rs)
+	    {
+	  fdata->lr_offset = offset;
+	  fdata->nosavedpc = 0;
+	  /* Invalidate lr_reg, but don't set it to -1.
+	     That would mean that it had never been set.  */
+	  lr_reg = -2;
+	      /* e_stw does not update r1, so add displacement to lr_offset.  */
+	      fdata->lr_offset += SIGNED_SHORT (op);
+	    }
+	  else
+	    {
+	      reg = GET_SRC_REG (op);
+
+	      if (fdata->saved_gpr == -1 || fdata->saved_gpr > reg)
+		{
+		  fdata->saved_gpr = reg;
+		  fdata->gpr_offset = SIGNED_SHORT (op) + offset;
+		}
+
+	      fdata->gpr_mask |= 1U << reg;
+	    }
+	  continue;
+	}
+      else if (vle
+	       /* se_stw rZ, SD4(r1) */
+	       && (((op >> 16) & 0xf00f) == (0xd000 | 1)))
+	{
+	  int rz = (op >> 20) & 0xf;
+
+	  if (lr_reg == rz)
+	    {
+	      fdata->lr_offset = offset;
+	      fdata->nosavedpc = 0;
+	      lr_reg = -2;
+	      fdata->lr_offset += (((op >> 24) & 0xf) << 2);
+	    }
+	  else
+	    {
+	      reg = (op >> 20) & 0xf; /* rz */
+	      if (reg >= 8)
+		reg += 16;
+
+	      if (fdata->saved_gpr == -1 || fdata->saved_gpr > reg)
+		{
+		  fdata->saved_gpr = reg;
+		  fdata->gpr_offset = (((op >> 24) & 0xf) << 2) + offset;
+		}
+
+	      fdata->gpr_mask |= 1U << reg;
+	    }
+	  insn_len = 2;
+	  continue;
+	}
+      else if (vle
+	       && (op & 0xfc1fff00) == 0x18010900) /* e_stm Rx, NUM(r1) */
+	{
+	  reg = GET_SRC_REG (op);
+
+	  fdata->gpr_mask |= ~((1U << reg) - 1);
+
+	  if (fdata->saved_gpr == -1 || fdata->saved_gpr > reg)
+	    {
+	      fdata->saved_gpr = reg;
+	      fdata->gpr_offset = SIGNED_BYTE (op) + offset;
+	    }
+
+	  continue;
+	}
+      else if (!vle &&
+	       lr_reg >= 0 &&
 	       /* std Rx, NUM(r1) || stdu Rx, NUM(r1) */
 	       (((op & 0xffff0000) == (lr_reg | 0xf8010000)) ||
 		/* stw Rx, NUM(r1) */
@@ -1743,7 +2246,23 @@ skip_prologue (struct gdbarch *gdbarch, CORE_ADDR pc, CORE_ADDR lim_pc,
 	  continue;
 
 	}
-      else if (cr_reg >= 0 &&
+      else if (vle
+	       && cr_reg >= 0
+		/* e_stw rS, D(r1) */
+	       && ((op & (OP_MASK | 0x1f << 21 | 0x1f << 16))
+		   == (OP (21) | (cr_reg << 21) | (1 << 16))))
+	{	/* where rS == cr */
+	  fdata->cr_offset = offset;
+	  /* Invalidate cr_reg, but don't set it to -1.
+	     That would mean that it had never been set.  */
+	  cr_reg = -2;
+	  /* e_stw does not update r1, so add displacement to cr_offset.  */
+	      fdata->cr_offset += SIGNED_SHORT (op);
+	  continue;
+
+	}
+      else if (!vle
+	       && cr_reg >= 0 &&
 	       /* std Rx, NUM(r1) || stdu Rx, NUM(r1) */
 	       (((op & 0xffff0000) == (cr_reg | 0xf8010000)) ||
 		/* stw Rx, NUM(r1) */
@@ -1764,33 +2283,35 @@ skip_prologue (struct gdbarch *gdbarch, CORE_ADDR pc, CORE_ADDR lim_pc,
 	  continue;
 
 	}
-      else if ((op & 0xfe80ffff) == 0x42800005 && lr_reg != -1)
+      else if (!vle && (op & 0xfe80ffff) == 0x42800005 && lr_reg != -1)
 	{
 	  /* bcl 20,xx,.+4 is used to get the current PC, with or without
 	     prediction bits.  If the LR has already been saved, we can
 	     skip it.  */
 	  continue;
 	}
-      else if (op == 0x48000005)
-	{			/* bl .+4 used in 
+      else if ((!vle && (op == 0x48000005))
+	       || (vle && (op == 0x78000005)))
+	{			/* (e_)bl .+4 used in
 				   -mrelocatable */
 	  fdata->used_bl = 1;
 	  continue;
 
 	}
-      else if (op == 0x48000004)
+      else if (!vle && op == 0x48000004)
 	{			/* b .+4 (xlc) */
 	  break;
 
 	}
-      else if ((op & 0xffff0000) == 0x3fc00000 ||  /* addis 30,0,foo@ha, used
+      else if (!vle &&
+	       ((op & 0xffff0000) == 0x3fc00000 ||  /* addis 30,0,foo@ha, used
 						      in V.4 -mminimal-toc */
-	       (op & 0xffff0000) == 0x3bde0000)
+		(op & 0xffff0000) == 0x3bde0000))
 	{			/* addi 30,30,foo@l */
 	  continue;
 
 	}
-      else if ((op & 0xfc000001) == 0x48000001)
+      else if (!vle && (op & 0xfc000001) == 0x48000001)
 	{			/* bl foo, 
 				   to save fprs???  */
 
@@ -1834,7 +2355,17 @@ skip_prologue (struct gdbarch *gdbarch, CORE_ADDR pc, CORE_ADDR lim_pc,
 	  continue;
 	}
       /* update stack pointer */
-      else if ((op & 0xfc1f0000) == 0x94010000)
+
+      else if (vle
+	       && ((op & (OPVUP_MASK | (0x1f << 16)))
+		   == (OPVUP (6,6) | (1 << 16))))
+	{		/* VLE e_stwu rS,D8(r1) */
+	  fdata->frameless = 0;
+	  fdata->offset = SIGNED_BYTE (op);
+	  offset = fdata->offset;
+	  continue;
+	}
+      else if (!vle && (op & 0xfc1f0000) == 0x94010000)
 	{		/* stu rX,NUM(r1) ||  stwu rX,NUM(r1) */
 	  fdata->frameless = 0;
 	  fdata->offset = SIGNED_SHORT (op);
@@ -1842,13 +2373,13 @@ skip_prologue (struct gdbarch *gdbarch, CORE_ADDR pc, CORE_ADDR lim_pc,
 	  continue;
 	}
       else if ((op & 0xfc1f016a) == 0x7c01016e)
-	{			/* stwux rX,r1,rY */
-	  /* No way to figure out what r1 is going to be.  */
+	{			/* stwux rX,r1,rY (same encoding in VLE) */
+	  /* no way to figure out what r1 is going to be */
 	  fdata->frameless = 0;
 	  offset = fdata->offset;
 	  continue;
 	}
-      else if ((op & 0xfc1f0003) == 0xf8010001)
+      else if (!vle && (op & 0xfc1f0003) == 0xf8010001)
 	{			/* stdu rX,NUM(r1) */
 	  fdata->frameless = 0;
 	  fdata->offset = SIGNED_SHORT (op & ~3UL);
@@ -1862,7 +2393,7 @@ skip_prologue (struct gdbarch *gdbarch, CORE_ADDR pc, CORE_ADDR lim_pc,
 	  offset = fdata->offset;
 	  continue;
 	}
-      else if ((op & 0xffff0000) == 0x38210000)
+      else if (!vle && (op & 0xffff0000) == 0x38210000)
  	{			/* addi r1,r1,SIMM */
  	  fdata->frameless = 0;
  	  fdata->offset += SIGNED_SHORT (op);
@@ -1871,7 +2402,8 @@ skip_prologue (struct gdbarch *gdbarch, CORE_ADDR pc, CORE_ADDR lim_pc,
  	}
       /* Load up minimal toc pointer.  Do not treat an epilogue restore
 	 of r31 as a minimal TOC load.  */
-      else if (((op >> 22) == 0x20f	||	/* l r31,... or l r30,...  */
+      else if (!vle &&
+	       ((op >> 22) == 0x20f	||	/* l r31,... or l r30,... */
 	       (op >> 22) == 0x3af)		/* ld r31,... or ld r30,...  */
 	       && !framep
 	       && !minimal_toc_loaded)
@@ -1879,9 +2411,20 @@ skip_prologue (struct gdbarch *gdbarch, CORE_ADDR pc, CORE_ADDR lim_pc,
 	  minimal_toc_loaded = 1;
 	  continue;
 
+	}
 	  /* move parameters from argument registers to local variable
-             registers */
- 	}
+	 registers.  */
+      else if (vle && ((op >> 16) & SE_RR_MASK) == SE_RR (0,1) /* se_mr rX,rY */
+	       /* R3 >= Ry >= R10 */
+	       && extract_ry (op >> 16) >= 3 && extract_ry (op >> 16) <= 10
+	       /* Rx: local var reg */
+	       && extract_rx (op >> 16) >= fdata->saved_gpr)
+	{
+	  insn_len = 2;
+	  continue;
+	}
+      /* Move parameters from argument registers to local variable
+	 registers.  */
       else if ((op & 0xfc0007fe) == 0x7c000378 &&	/* mr(.)  Rx,Ry */
                (((op >> 21) & 31) >= 3) &&              /* R3 >= Ry >= R10 */
                (((op >> 21) & 31) <= 10) &&
@@ -1893,24 +2436,26 @@ skip_prologue (struct gdbarch *gdbarch, CORE_ADDR pc, CORE_ADDR lim_pc,
 	  /* store parameters in stack */
 	}
       /* Move parameters from argument registers to temporary register.  */
-      else if (store_param_on_stack_p (op, framep, &r0_contains_arg))
-        {
+     else if (store_param_on_stack_p (op, framep, &r0_contains_arg, vle,
+				      &insn_len))
+	{
 	  continue;
-
-	  /* Set up frame pointer */
 	}
-      else if (op == 0x603d0000)       /* oril r29, r1, 0x0 */
+	  /* Set up frame pointer */
+      else if (vle && (op >> 16) == 0x011f) /* se_mr r31, r1 */
 	{
 	  fdata->frameless = 0;
 	  framep = 1;
-	  fdata->alloca_reg = (tdep->ppc_gp0_regnum + 29);
+	  fdata->alloca_reg = (tdep->ppc_gp0_regnum + 31);
+	  insn_len = 2;
 	  continue;
 
 	  /* Another way to set up the frame pointer.  */
 	}
-      else if (op == 0x603f0000	/* oril r31, r1, 0x0 */
-	       || op == 0x7c3f0b78)
-	{			/* mr r31, r1 */
+       /* Set up frame pointer */
+      else if ((!vle && op == 0x603f0000)	     /* oril r31, r1, 0x0 */
+	       || op == 0x7c3f0b78) /* mr r31, r1 (also valid in VLE)*/
+	{
 	  fdata->frameless = 0;
 	  framep = 1;
 	  fdata->alloca_reg = (tdep->ppc_gp0_regnum + 31);
@@ -1918,7 +2463,8 @@ skip_prologue (struct gdbarch *gdbarch, CORE_ADDR pc, CORE_ADDR lim_pc,
 
 	  /* Another way to set up the frame pointer.  */
 	}
-      else if ((op & 0xfc1fffff) == 0x38010000)
+      /* Another way to set up the frame pointer.  */
+     else if (!vle && (op & 0xfc1fffff) == 0x38010000)
 	{			/* addi rX, r1, 0x0 */
 	  fdata->frameless = 0;
 	  framep = 1;
@@ -1947,7 +2493,7 @@ skip_prologue (struct gdbarch *gdbarch, CORE_ADDR pc, CORE_ADDR lim_pc,
          rS is the register where vrsave was stored in a previous
 	 instruction.  */
       /* 100100 sssss 00001 dddddddd dddddddd */
-      else if ((op & 0xfc1f0000) == 0x90010000)     /* stw rS, d(r1) */
+      else if (!vle && (op & 0xfc1f0000) == 0x90010000)     /* stw rS, d(r1) */
         {
           if (vrsave_reg == GET_SRC_REG (op))
 	    {
@@ -1958,8 +2504,9 @@ skip_prologue (struct gdbarch *gdbarch, CORE_ADDR pc, CORE_ADDR lim_pc,
         }
       /* Compute the new value of vrsave, by modifying the register
          where vrsave was saved to.  */
-      else if (((op & 0xfc000000) == 0x64000000)    /* oris Ra, Rs, UIMM */
-	       || ((op & 0xfc000000) == 0x60000000))/* ori Ra, Rs, UIMM */
+      else if (!vle
+	       && (((op & 0xfc000000) == 0x64000000) /* oris Ra, Rs, UIMM */
+		   || ((op & 0xfc000000) == 0x60000000))) /* ori Ra, Rs, UIMM */
 	{
 	  continue;
 	}
@@ -1968,8 +2515,9 @@ skip_prologue (struct gdbarch *gdbarch, CORE_ADDR pc, CORE_ADDR lim_pc,
 	 stack.  */
       /* 001110 00000 00000 iiii iiii iiii iiii  */
       /* 001110 01110 00000 iiii iiii iiii iiii  */
-      else if ((op & 0xffff0000) == 0x38000000         /* li r0, SIMM */
-               || (op & 0xffff0000) == 0x39c00000)     /* li r14, SIMM */
+      else if (!vle
+	       && ((op & 0xffff0000) == 0x38000000         /* li r0, SIMM */
+		   || (op & 0xffff0000) == 0x39c00000))    /* li r14, SIMM */
 	{
           if ((op & 0xffff0000) == 0x38000000)
             r0_contains_arg = 0;
@@ -2113,12 +2661,28 @@ skip_prologue (struct gdbarch *gdbarch, CORE_ADDR pc, CORE_ADDR lim_pc,
 	      && (fdata->gpr_mask & all_mask) == all_mask)
 	    break;
 
-	  if (op == 0x4e800020		/* blr */
-	      || op == 0x4e800420)	/* bctr */
+	  if (vle
+	      ? ((op >> 16) == 0x0004		/* se_blr */
+		  || (op >> 16) == 0x0006)	/* se_bctr */
+	      : (op == 0x4e800020		/* blr */
+		 || op == 0x4e800420))		/* bctr */
 	    /* Do not scan past epilogue in frameless functions or
 	       trampolines.  */
 	    break;
-	  if ((op & 0xf4000000) == 0x40000000) /* bxx */
+
+	  if (vle
+	      ? (   ((op >> 16) & C_LK_MASK) == C_LK (2,0) /* se_blr */
+		 || ((op >> 16) & C_LK_MASK) == C_LK (2,1) /* se_blrl */
+		 || ((op >> 16) & C_LK_MASK) == C_LK (3,0) /* se_bctr */
+		 || ((op >> 16) & C_LK_MASK) == C_LK (3,1) /* se_bctrl */
+		 || ((op >> 16) & BD8_MASK) == BD8 (58,0,0) /* se_b */
+		 || ((op >> 16) & BD8_MASK) == BD8 (58,0,1) /* se_bl */
+		 || ((op >> 16) & BD8IO_MASK) == BD8IO (28) /* se_bc */
+		 || (op & BD24_MASK) == BD24 (30,0,0) /* e_b */
+		 || (op & BD24_MASK) == BD24 (30,0,1) /* e_bl */
+		 || (op & BD15_MASK) == BD15 (30,8,0) /* e_bc */
+		 || (op & BD15_MASK) == BD15 (30,8,1)) /* e_bcl */
+	      : ((op & 0xf4000000) == 0x40000000)) /* bxx */
 	    /* Never skip branches.  */
 	    break;
 
@@ -2129,6 +2693,8 @@ skip_prologue (struct gdbarch *gdbarch, CORE_ADDR pc, CORE_ADDR lim_pc,
 
 	  /* Continue scanning.  */
 	  prev_insn_was_prologue_insn = 0;
+
+	  insn_len = ppc_insn_length (op, pc, gdbarch, vle);
 	  continue;
 	}
     }
@@ -2220,6 +2786,9 @@ rs6000_skip_main_prologue (struct gdbarch *gdbarch, CORE_ADDR pc)
   enum bfd_endian byte_order = gdbarch_byte_order (gdbarch);
   gdb_byte buf[4];
   unsigned long op;
+
+  if (ppc_pc_is_vle (pc))
+    return pc;
 
   if (target_read_memory (pc, buf, 4))
     return pc;
@@ -2465,6 +3034,12 @@ rs6000_register_name (struct gdbarch *gdbarch, int regno)
       && regno < tdep->ppc_vsr0_upper_regnum + ppc_num_gprs)
     return "";
 
+  /* Hide SPRs from list of registers */
+  if (tdep->ppc_spr_regnum >= 0
+      && tdep->ppc_spr_regnum <= regno
+      && regno < tdep->ppc_spr_regnum + ppc_num_sprs)
+    return "";
+
   /* Check if the SPE pseudo registers are available.  */
   if (IS_SPE_PSEUDOREG (tdep, regno))
     {
@@ -2519,6 +3094,13 @@ rs6000_register_name (struct gdbarch *gdbarch, int regno)
       return efpr_regnames[regno - tdep->ppc_efpr0_regnum];
     }
 
+  if (IS_SPR_PSEUDOREG (tdep, regno))
+    {
+      gdb_assert((regno - tdep->ppc_spr_pseudo_regnum) < (sizeof(e200sprs) / sizeof(const char *const)));
+
+      return tdesc_register_name(gdbarch, PPC_SPR_REGNUM + regno - tdep->ppc_spr_pseudo_regnum);
+    }
+
   return tdesc_register_name (gdbarch, regno);
 }
 
@@ -2534,7 +3116,8 @@ rs6000_pseudo_register_type (struct gdbarch *gdbarch, int regnum)
   gdb_assert (IS_SPE_PSEUDOREG (tdep, regnum)
 	      || IS_DFP_PSEUDOREG (tdep, regnum)
 	      || IS_VSX_PSEUDOREG (tdep, regnum)
-	      || IS_EFP_PSEUDOREG (tdep, regnum));
+	      || IS_EFP_PSEUDOREG (tdep, regnum)
+	      || IS_SPR_PSEUDOREG (tdep, regnum));
 
   /* These are the e500 pseudo-registers.  */
   if (IS_SPE_PSEUDOREG (tdep, regnum))
@@ -2545,6 +3128,9 @@ rs6000_pseudo_register_type (struct gdbarch *gdbarch, int regnum)
   else if (IS_VSX_PSEUDOREG (tdep, regnum))
     /* POWER7 VSX pseudo-registers.  */
     return rs6000_builtin_type_vec128 (gdbarch);
+  else if (IS_SPR_PSEUDOREG (tdep, regnum))
+    /* e200 SPR pseudo-registers.  */
+    return builtin_type (gdbarch)->builtin_uint32;
   else
     /* POWER7 Extended FP pseudo-registers.  */
     return builtin_type (gdbarch)->builtin_double;
@@ -2561,10 +3147,11 @@ rs6000_pseudo_register_reggroup_p (struct gdbarch *gdbarch, int regnum,
   gdb_assert (IS_SPE_PSEUDOREG (tdep, regnum)
 	      || IS_DFP_PSEUDOREG (tdep, regnum)
 	      || IS_VSX_PSEUDOREG (tdep, regnum)
-	      || IS_EFP_PSEUDOREG (tdep, regnum));
+	      || IS_EFP_PSEUDOREG (tdep, regnum)
+	      || IS_SPR_PSEUDOREG (tdep, regnum));
 
   /* These are the e500 pseudo-registers or the POWER7 VSX registers.  */
-  if (IS_SPE_PSEUDOREG (tdep, regnum) || IS_VSX_PSEUDOREG (tdep, regnum))
+  if (IS_SPE_PSEUDOREG (tdep, regnum) || IS_VSX_PSEUDOREG (tdep, regnum) || IS_SPR_PSEUDOREG (tdep, regnum))
     return group == all_reggroup || group == vector_reggroup;
   else
     /* PPC decimal128 or Extended FP pseudo-registers.  */
@@ -2869,6 +3456,36 @@ efpr_pseudo_register_write (struct gdbarch *gdbarch, struct regcache *regcache,
 			   buffer);
 }
 
+/* Read method for e200 SPR pseudo-registers.  */
+static enum register_status
+spr_pseudo_register_read (struct gdbarch *gdbarch, struct regcache *regcache,
+			   int reg_nr, gdb_byte *buffer)
+{
+  struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
+  int reg_index = reg_nr - tdep->ppc_spr_pseudo_regnum;
+  int offset = gdbarch_byte_order (gdbarch) == BFD_ENDIAN_BIG ? 0 : 8;
+
+
+  return regcache_raw_read_part (regcache, tdep->ppc_spr_regnum + reg_index,
+				 offset, register_size (gdbarch, reg_nr),
+				 buffer);
+}
+
+/* Write method for e200 SPR pseudo-registers.  */
+static void
+spr_pseudo_register_write (struct gdbarch *gdbarch, struct regcache *regcache,
+			    int reg_nr, const gdb_byte *buffer)
+{
+  struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
+  int reg_index = reg_nr - tdep->ppc_spr_pseudo_regnum;
+  int offset = gdbarch_byte_order (gdbarch) == BFD_ENDIAN_BIG ? 0 : 8;
+
+  /* Write the portion that overlaps the VMX register.  */
+  regcache_raw_write_part (regcache, tdep->ppc_spr_regnum + reg_index,
+			   offset, register_size (gdbarch, reg_nr),
+			   buffer);
+}
+
 static enum register_status
 rs6000_pseudo_register_read (struct gdbarch *gdbarch,
 			     struct regcache *regcache,
@@ -2881,6 +3498,8 @@ rs6000_pseudo_register_read (struct gdbarch *gdbarch,
 
   if (IS_SPE_PSEUDOREG (tdep, reg_nr))
     return e500_pseudo_register_read (gdbarch, regcache, reg_nr, buffer);
+  else if (IS_SPR_PSEUDOREG (tdep, reg_nr))
+    return spr_pseudo_register_read (gdbarch, regcache, reg_nr, buffer);
   else if (IS_DFP_PSEUDOREG (tdep, reg_nr))
     return dfp_pseudo_register_read (gdbarch, regcache, reg_nr, buffer);
   else if (IS_VSX_PSEUDOREG (tdep, reg_nr))
@@ -2906,6 +3525,8 @@ rs6000_pseudo_register_write (struct gdbarch *gdbarch,
 
   if (IS_SPE_PSEUDOREG (tdep, reg_nr))
     e500_pseudo_register_write (gdbarch, regcache, reg_nr, buffer);
+  else if (IS_SPR_PSEUDOREG (tdep, reg_nr))
+    spr_pseudo_register_write (gdbarch, regcache, reg_nr, buffer);
   else if (IS_DFP_PSEUDOREG (tdep, reg_nr))
     dfp_pseudo_register_write (gdbarch, regcache, reg_nr, buffer);
   else if (IS_VSX_PSEUDOREG (tdep, reg_nr))
@@ -3121,6 +3742,10 @@ static struct variant variants[] =
    bfd_mach_ppc_7400, &tdesc_powerpc_7400},
   {"e500", "Motorola PowerPC e500", bfd_arch_powerpc,
    bfd_mach_ppc_e500, &tdesc_powerpc_e500},
+  {"vle", "Motorola PowerPC VLE", bfd_arch_powerpc,
+   bfd_mach_ppc_vle, &tdesc_powerpc_vle},
+  {"e200", "Freescale PowerPC VLE", bfd_arch_powerpc,
+   bfd_mach_ppc_vle, &tdesc_powerpc_vle},
 
   /* 64-bit */
   {"powerpc64", "PowerPC 64-bit user-level", bfd_arch_powerpc,
@@ -3165,6 +3790,14 @@ find_variant_by_arch (enum bfd_architecture arch, unsigned long mach)
 static int
 gdb_print_insn_powerpc (bfd_vma memaddr, disassemble_info *info)
 {
+  if (!info->disassembler_options)
+    {
+      if (info->mach == bfd_mach_ppc_vle)
+	info->disassembler_options = "vle";
+      else
+	info->disassembler_options = "any";
+    }
+
   if (info->endian == BFD_ENDIAN_BIG)
     return print_insn_big_powerpc (memaddr, info);
   else
@@ -3597,7 +4230,7 @@ ppc_dwarf2_frame_init_reg (struct gdbarch *gdbarch, int regnum,
    compiled for SPE, but not actually using SPE instructions.  */
 
 static int
-bfd_uses_spe_extensions (bfd *abfd)
+bfd_uses_spe_extensions (bfd *abfd, unsigned long *mach)
 {
   asection *sect;
   gdb_byte *contents = NULL;
@@ -3698,6 +4331,13 @@ bfd_uses_spe_extensions (bfd *abfd)
 	    {
 	      success = 1;
 	      data_len = 0;
+	      *mach = bfd_mach_ppc_e500;
+	    }
+	  /* The VLE indentifier is 0x104.  */
+	  else if (apu == 0x104)
+	    {
+	      success = 1;
+	      *mach = bfd_mach_ppc_vle;
 	    }
 	}
 
@@ -5413,7 +6053,7 @@ rs6000_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
   enum powerpc_vector_abi vector_abi = powerpc_vector_abi_global;
   enum powerpc_elf_abi elf_abi = POWERPC_ELF_AUTO;
   int have_fpu = 1, have_spe = 0, have_mq = 0, have_altivec = 0, have_dfp = 0,
-      have_vsx = 0;
+      have_vsx = 0, have_sprs = 0;
   int tdesc_wordsize = -1;
   const struct target_desc *tdesc = info.target_desc;
   struct tdesc_arch_data *tdesc_data = NULL;
@@ -5475,10 +6115,9 @@ rs6000_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
      which version of it) can execute it.  Grovel through the section
      looking for relevant e500 APUs.  */
 
-  if (bfd_uses_spe_extensions (info.abfd))
+  if (bfd_uses_spe_extensions (info.abfd, &mach))
     {
       arch = info.bfd_arch_info->arch;
-      mach = bfd_mach_ppc_e500;
       bfd_default_set_arch_mach (&abfd, arch, mach);
       info.bfd_arch_info = bfd_get_arch_info (&abfd);
     }
@@ -5694,6 +6333,21 @@ rs6000_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
 	}
       else
 	have_spe = 0;
+
+      feature = tdesc_find_feature (tdesc,
+				    "org.gnu.gdb.power.e200sprs");
+
+      if (feature != NULL)
+	{
+	  for (i = 0; i < (sizeof(e200sprs) / sizeof(const char *const)); i++)
+	    tdesc_numbered_register (feature, tdesc_data,
+				     PPC_SPR_REGNUM + i,
+				     e200sprs[i]);
+
+	  have_sprs = 1;
+	}
+      else
+	have_sprs = 0;
     }
 
   /* If we have a 64-bit binary on a 32-bit target, complain.  Also
@@ -5869,6 +6523,8 @@ rs6000_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
   tdep->ppc_ev0_upper_regnum = have_spe ? PPC_SPE_UPPER_GP0_REGNUM : -1;
   tdep->ppc_acc_regnum = have_spe ? PPC_SPE_ACC_REGNUM : -1;
   tdep->ppc_spefscr_regnum = have_spe ? PPC_SPE_FSCR_REGNUM : -1;
+  tdep->ppc_spr_regnum = have_sprs ? PPC_SPR_REGNUM : -1;
+
 
   set_gdbarch_pc_regnum (gdbarch, PPC_PC_REGNUM);
   set_gdbarch_sp_regnum (gdbarch, PPC_R0_REGNUM + 1);
@@ -5892,7 +6548,7 @@ rs6000_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
   else
     tdep->lr_frame_offset = 4;
 
-  if (have_spe || have_dfp || have_vsx)
+  if (have_spe || have_dfp || have_vsx || have_sprs)
     {
       set_gdbarch_pseudo_register_read (gdbarch, rs6000_pseudo_register_read);
       set_gdbarch_pseudo_register_write (gdbarch,
@@ -5908,6 +6564,11 @@ rs6000_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
     set_gdbarch_print_insn (gdbarch, gdb_print_insn_powerpc);
 
   set_gdbarch_num_regs (gdbarch, PPC_NUM_REGS);
+
+  if (have_sprs)
+    num_pseudoregs += ppc_num_sprs;
+  else if (have_spe || have_dfp || have_vsx)
+    num_pseudoregs += ppc_num_sprs; /* SPRs placeholder */
 
   if (have_spe)
     num_pseudoregs += 32;
@@ -5952,6 +6613,7 @@ rs6000_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
 
   set_gdbarch_inner_than (gdbarch, core_addr_lessthan);
   set_gdbarch_breakpoint_from_pc (gdbarch, rs6000_breakpoint_from_pc);
+  set_gdbarch_remote_breakpoint_from_pc(gdbarch, rs6000_remote_breakpoint_from_pc);
 
   /* The value of symbols of type N_SO and N_FUN maybe null when
      it shouldn't be.  */
@@ -6032,8 +6694,21 @@ rs6000_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
   tdep->ppc_dl0_regnum = -1;
   tdep->ppc_vsr0_regnum = -1;
   tdep->ppc_efpr0_regnum = -1;
+  tdep->ppc_spr_pseudo_regnum = -1;
 
   cur_reg = gdbarch_num_regs (gdbarch);
+
+  if (have_sprs)
+    {
+      tdep->ppc_spr_pseudo_regnum = cur_reg;
+      cur_reg += ppc_num_sprs;
+    }
+  else if (have_spe || have_dfp || have_vsx)
+    {
+      /* SPRs placeholder. Names will be absent */
+      tdep->ppc_spr_pseudo_regnum = cur_reg;
+      cur_reg += ppc_num_sprs;
+    }
 
   if (have_spe)
     {
@@ -6240,6 +6915,7 @@ _initialize_rs6000_tdep (void)
   initialize_tdesc_powerpc_750 ();
   initialize_tdesc_powerpc_860 ();
   initialize_tdesc_powerpc_e500 ();
+  initialize_tdesc_powerpc_vle ();
   initialize_tdesc_rs6000 ();
 
   /* Add root prefix command for all "set powerpc"/"show powerpc"

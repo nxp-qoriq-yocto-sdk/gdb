@@ -223,6 +223,9 @@ enum target_xfer_status
   /* The piece of the object requested is unavailable.  */
   TARGET_XFER_UNAVAILABLE = 2,
 
+    /* The piece of the object requested is illegal.  */
+  TARGET_XFER_ILLEGAL = 3,
+
   /* Generic I/O error.  Note that it's important that this is '-1',
      as we still have target_xfer-related code returning hardcoded
      '-1' on error.  */

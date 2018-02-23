@@ -202,6 +202,11 @@ memory_error_message (enum target_xfer_status err,
     case TARGET_XFER_UNAVAILABLE:
       return xstrprintf (_("Memory at address %s unavailable."),
 			 paddress (gdbarch, memaddr));
+
+    case TARGET_XFER_ILLEGAL:
+      return xstrprintf (_("Illegal instruction fetched at address %s. Memory corrupted or target reset ?\n"),
+			  paddress (gdbarch, memaddr));
+
     default:
       internal_error (__FILE__, __LINE__,
 		      "unhandled target_xfer_status: %s (%s)",
@@ -230,6 +235,10 @@ memory_error (enum target_xfer_status err, CORE_ADDR memaddr)
       break;
     case TARGET_XFER_UNAVAILABLE:
       exception = NOT_AVAILABLE_ERROR;
+      break;
+    case TARGET_XFER_ILLEGAL:
+      exception = TARGET_CLOSE_ERROR;
+      puts_unfiltered(str);
       break;
     }
 

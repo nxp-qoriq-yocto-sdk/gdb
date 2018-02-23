@@ -63,6 +63,7 @@ enum return_value_convention ppc64_sysv_abi_return_value (struct gdbarch *gdbarc
 /* From rs6000-tdep.c...  */
 int altivec_register_p (struct gdbarch *gdbarch, int regno);
 int vsx_register_p (struct gdbarch *gdbarch, int regno);
+int spr_register_p (struct gdbarch *gdbarch, int regno);
 int spe_register_p (struct gdbarch *gdbarch, int regno);
 
 /* Return non-zero if the architecture described by GDBARCH has
@@ -76,6 +77,7 @@ int ppc_altivec_support_p (struct gdbarch *gdbarch);
 /* Return non-zero if the architecture described by GDBARCH has
    VSX registers (vsr0 --- vsr63).  */
 int vsx_support_p (struct gdbarch *gdbarch);
+int spr_support_p (struct gdbarch *gdbarch);
 int ppc_deal_with_atomic_sequence (struct frame_info *frame);
 
 
@@ -251,6 +253,10 @@ struct gdbarch_tdep
     /* Offset to ABI specific location where link register is saved.  */
     int lr_frame_offset;	
 
+    /* e200 special purpose registers.  */
+    int ppc_spr_regnum;		/* First spr register.  */
+    int ppc_spr_pseudo_regnum;
+
     /* An array of integers, such that sim_regno[I] is the simulator
        register number for GDB register number I, or -1 if the
        simulator does not implement that register.  */
@@ -273,7 +279,8 @@ enum
     ppc_num_vrs = 32,		/* 32 Altivec vector registers.  */
     ppc_num_vshrs = 32,		/* 32 doublewords (dword 1 of vs0~vs31).  */
     ppc_num_vsrs = 64,		/* 64 VSX vector registers.  */
-    ppc_num_efprs = 32		/* 32 Extended FP registers.  */
+    ppc_num_efprs = 32,		/* 32 Extended FP registers.  */
+    ppc_num_sprs = 122		/* e200 SPR registers.  */
   };
 
 
@@ -301,6 +308,8 @@ enum {
   PPC_VRSAVE_REGNUM = 139,
   PPC_VSR0_UPPER_REGNUM = 140,
   PPC_VSR31_UPPER_REGNUM = 171,
+  PPC_SPR_REGNUM = 878,          /* equals placeholder 1000 minus ppc_num_sprs */
+  PPC_SPR_LAST_REGNUM = 999,
   PPC_NUM_REGS
 };
 

@@ -1,18 +1,18 @@
 /* THIS FILE IS GENERATED.  -*- buffer-read-only: t -*- vi:set ro:
-  Original: powerpc-32.xml */
+  Original: powerpc-e500.xml */
 
 #include "defs.h"
 #include "osabi.h"
 #include "target-descriptions.h"
 
-struct target_desc *tdesc_powerpc_32;
+struct target_desc *tdesc_powerpc_vle;
 static void
-initialize_tdesc_powerpc_32 (void)
+initialize_tdesc_powerpc_vle (void)
 {
   struct target_desc *result = allocate_target_description ();
   struct tdesc_feature *feature;
 
-  set_tdesc_architecture (result, bfd_scan_arch ("powerpc:common"));
+  set_tdesc_architecture (result, bfd_scan_arch ("powerpc:vle"));
 
   feature = tdesc_create_feature (result, "org.gnu.gdb.power.core");
   tdesc_create_reg (feature, "r0", 0, 1, NULL, 32, "uint32");
@@ -54,42 +54,8 @@ initialize_tdesc_powerpc_32 (void)
   tdesc_create_reg (feature, "ctr", 68, 1, NULL, 32, "uint32");
   tdesc_create_reg (feature, "xer", 69, 1, NULL, 32, "uint32");
 
-  feature = tdesc_create_feature (result, "org.gnu.gdb.power.fpu");
-  tdesc_create_reg (feature, "f0", 32, 1, NULL, 64, "ieee_double");
-  tdesc_create_reg (feature, "f1", 33, 1, NULL, 64, "ieee_double");
-  tdesc_create_reg (feature, "f2", 34, 1, NULL, 64, "ieee_double");
-  tdesc_create_reg (feature, "f3", 35, 1, NULL, 64, "ieee_double");
-  tdesc_create_reg (feature, "f4", 36, 1, NULL, 64, "ieee_double");
-  tdesc_create_reg (feature, "f5", 37, 1, NULL, 64, "ieee_double");
-  tdesc_create_reg (feature, "f6", 38, 1, NULL, 64, "ieee_double");
-  tdesc_create_reg (feature, "f7", 39, 1, NULL, 64, "ieee_double");
-  tdesc_create_reg (feature, "f8", 40, 1, NULL, 64, "ieee_double");
-  tdesc_create_reg (feature, "f9", 41, 1, NULL, 64, "ieee_double");
-  tdesc_create_reg (feature, "f10", 42, 1, NULL, 64, "ieee_double");
-  tdesc_create_reg (feature, "f11", 43, 1, NULL, 64, "ieee_double");
-  tdesc_create_reg (feature, "f12", 44, 1, NULL, 64, "ieee_double");
-  tdesc_create_reg (feature, "f13", 45, 1, NULL, 64, "ieee_double");
-  tdesc_create_reg (feature, "f14", 46, 1, NULL, 64, "ieee_double");
-  tdesc_create_reg (feature, "f15", 47, 1, NULL, 64, "ieee_double");
-  tdesc_create_reg (feature, "f16", 48, 1, NULL, 64, "ieee_double");
-  tdesc_create_reg (feature, "f17", 49, 1, NULL, 64, "ieee_double");
-  tdesc_create_reg (feature, "f18", 50, 1, NULL, 64, "ieee_double");
-  tdesc_create_reg (feature, "f19", 51, 1, NULL, 64, "ieee_double");
-  tdesc_create_reg (feature, "f20", 52, 1, NULL, 64, "ieee_double");
-  tdesc_create_reg (feature, "f21", 53, 1, NULL, 64, "ieee_double");
-  tdesc_create_reg (feature, "f22", 54, 1, NULL, 64, "ieee_double");
-  tdesc_create_reg (feature, "f23", 55, 1, NULL, 64, "ieee_double");
-  tdesc_create_reg (feature, "f24", 56, 1, NULL, 64, "ieee_double");
-  tdesc_create_reg (feature, "f25", 57, 1, NULL, 64, "ieee_double");
-  tdesc_create_reg (feature, "f26", 58, 1, NULL, 64, "ieee_double");
-  tdesc_create_reg (feature, "f27", 59, 1, NULL, 64, "ieee_double");
-  tdesc_create_reg (feature, "f28", 60, 1, NULL, 64, "ieee_double");
-  tdesc_create_reg (feature, "f29", 61, 1, NULL, 64, "ieee_double");
-  tdesc_create_reg (feature, "f30", 62, 1, NULL, 64, "ieee_double");
-  tdesc_create_reg (feature, "f31", 63, 1, NULL, 64, "ieee_double");
-  tdesc_create_reg (feature, "fpscr", 70, 1, "float", 32, "int");
-
   feature = tdesc_create_feature (result, "org.gnu.gdb.power.e200sprs");
+
   /* NOTE: regnum = SPR number + offset 100 */
   tdesc_create_reg (feature, "dec",      122, 1, NULL, 32, "uint32");
   tdesc_create_reg (feature, "srr0",     126, 1, NULL, 32, "uint32");
@@ -192,5 +158,5 @@ initialize_tdesc_powerpc_32 (void)
   tdesc_create_reg (feature, "l1finv0", 1116, 1, NULL, 32, "uint32");
   tdesc_create_reg (feature, "svr",     1123, 1, NULL, 32, "uint32");
 
-  tdesc_powerpc_32 = result;
+  tdesc_powerpc_vle = result;
 }
