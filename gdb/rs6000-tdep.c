@@ -4252,7 +4252,7 @@ bfd_uses_spe_extensions (bfd *abfd, unsigned long *mach)
     return 1;
 #endif
 
-  sect = bfd_get_section_by_name (abfd, ".PPC.EMB.apuinfo");
+  sect = bfd_get_section_by_name (abfd, APUINFO_SECTION_NAME);
   if (!sect)
     return 0;
 
@@ -4301,7 +4301,7 @@ bfd_uses_spe_extensions (bfd *abfd, unsigned long *mach)
 
       /* The name must be "APUinfo\0".  */
       if (name_len != 8
-	  && strcmp ((const char *) ptr, "APUinfo") != 0)
+	  && strcmp ((const char *) ptr, APUINFO_LABEL) != 0)
 	break;
       ptr += name_len;
 
@@ -4327,16 +4327,16 @@ bfd_uses_spe_extensions (bfd *abfd, unsigned long *mach)
 
 	  /* The SPE APU is 0x100; the SPEFP APU is 0x101.  Accept
 	     either.  */
-	  if (apu == 0x100 || apu == 0x101)
+	  if (apu == PPC_APUINFO_SPE || apu == PPC_APUINFO_EFS)
+	    {
+	      success = 1;
+	      if (*mach != bfd_mach_ppc_vle)
+	        *mach = bfd_mach_ppc_e500;
+	    }
+	  else if (apu == PPC_APUINFO_VLE)
 	    {
 	      success = 1;
 	      data_len = 0;
-	      *mach = bfd_mach_ppc_e500;
-	    }
-	  /* The VLE indentifier is 0x104.  */
-	  else if (apu == 0x104)
-	    {
-	      success = 1;
 	      *mach = bfd_mach_ppc_vle;
 	    }
 	}
